@@ -1,5 +1,6 @@
 import ContributionGraph from "@/components/ContributionGraph";
 import ContributionHeatmap from "@/components/ContributionHeatmap";
+import QuickMetricsCharts from "@/components/QuickMetricsCharts"; // 🌟 Your triple micro-charts component
 import PRMetrics from "@/components/PRMetrics";
 import PRBreakdownChart from "@/components/PRBreakdownChart";
 import GoalTracker from "@/components/GoalTracker";
@@ -40,22 +41,28 @@ export default async function DashboardPage() {
         <PersonalRecords />
       </div>
 
-      {/* Row 1: Contribution graph + Streak + Friend Comparison */}
+      {/* Row 1: Contribution graph + Heatmap + Friend Comparison + Quick Metrics */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2">
+        {/* Left Column (Spans 2 columns) */}
+        <div className="lg:col-span-2 flex flex-col gap-6">
           <ContributionGraph />
-          <div className="mt-6">
-            <ContributionHeatmap />
+          <ContributionHeatmap />
+          
+          {/* Grouped container so QuickMetricsCharts sits perfectly below Friend Comparison on the left */}
+          <div className="flex flex-col gap-6">
+            <FriendComparison />
+            {/* 🎯 Injected here: Sits exactly below Friend Comparison and directly above Row 2 (PR Analytics) */}
+            <QuickMetricsCharts />
           </div>
         </div>
 
+        {/* Right Column (Spans 1 column) - Kept completely original */}
         <div className="flex flex-col gap-6">
           <StreakTracker />
-          <FriendComparison />
         </div>
       </div>
 
-      {/* Row 2: PR metrics, PR breakdown & Time Chart */}
+      {/* Row 2: PR metrics, PR breakdown & Time Chart (Directly below your new charts!) */}
       <div className="mt-6 grid grid-cols-1 lg:grid-cols-3 gap-6">
         <PRMetrics />
         <PRBreakdownChart />
