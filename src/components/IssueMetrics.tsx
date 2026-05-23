@@ -8,6 +8,7 @@ interface IssueData {
   currentlyOpen: number;
   avgCloseTimeDays: number;
   trend: number;
+  mostActiveRepo: string | null;
 }
 
 export default function IssueMetrics() {
@@ -40,6 +41,7 @@ export default function IssueMetrics() {
         { label: "Issues Closed (30d)", value: metrics.closed },
         { label: "Currently Open", value: metrics.currentlyOpen },
         { label: "Avg Close Time", value: `${metrics.avgCloseTimeDays}d` },
+        { label: "Most Active Repo", value: metrics.mostActiveRepo ?? "—" },
       ]
     : [];
 
@@ -51,7 +53,7 @@ export default function IssueMetrics() {
       : null;
 
   const trendColor =
-    metrics && metrics.trend > 0 ? "text-green-400" : "text-red-400";
+    metrics && metrics.trend > 0 ? "text-green-400" : "text-[var(--destructive)]";
 
   return (
     <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-6 shadow-sm">
@@ -59,33 +61,40 @@ export default function IssueMetrics() {
         Issue Analytics
       </h2>
       {loading ? (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          {[1, 2, 3, 4].map((i) => (
+        <div
+          role="status"
+          aria-live="polite"
+          aria-busy="true"
+          className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4"
+        >
+          <span className="sr-only">Loading issue analytics</span>
+          {[1, 2, 3, 4, 5].map((i) => (
             <div
               key={i}
+              aria-hidden="true"
               className="h-20 rounded-lg bg-[var(--card-muted)] p-4 animate-pulse"
             />
           ))}
         </div>
       ) : error ? (
-        <div className="rounded-lg border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-400">
+        <div className="rounded-lg border border-[var(--destructive)]/20 bg-[var(--destructive)]/10 p-4 text-sm text-[var(--destructive)]">
           <p>{error}</p>
           <button
             type="button"
             onClick={fetchMetrics}
-            className="mt-3 rounded-md border border-red-500/30 px-3 py-1.5 text-xs font-medium text-red-300 transition-colors hover:bg-red-500/10"
+            className="mt-3 rounded-md border border-[var(--destructive)]/30 px-3 py-1.5 text-xs font-medium text-[var(--destructive)] transition-colors hover:bg-[var(--destructive)]/10"
           >
             Try again
           </button>
         </div>
       ) : (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
           {stats.map((stat, idx) => (
             <div
               key={stat.label}
               className="rounded-lg bg-[var(--control)] p-4 text-center"
             >
-              <div className="text-2xl font-bold text-[var(--accent)]">
+              <div className="text-2xl font-bold text-[var(--accent)] truncate" title={String(stat.value)}>
                 {stat.value}
               </div>
               <div className="mt-1 text-sm text-[var(--muted-foreground)]">

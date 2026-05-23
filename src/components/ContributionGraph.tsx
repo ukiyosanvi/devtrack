@@ -1,17 +1,22 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useAccount } from "@/components/AccountContext";
+import CommitSearchPanel from "@/components/CommitSearchPanel";
+import type { CommitItem } from "@/lib/github";
 import {
   BarChart,
   Bar,
   LineChart,
   Line,
+  AreaChart,
+  Area,
   XAxis,
   YAxis,
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
+  Legend,
 } from "recharts";
 
 interface DayData {
@@ -19,11 +24,27 @@ interface DayData {
   commits: number;
 }
 
-type ViewMode = "bar" | "line";
+interface GraphPoint {
+  date: string;
+  you: number;
+  friend: number;
+}
+
+interface ContributionSources {
+  github?: Record<string, number>;
+  gitlab?: Record<string, number>;
+}
+
+interface ContributionResponse {
+  data: Record<string, number>;
+  commits?: CommitItem[];
+  sources?: ContributionSources;
+}
+
+type ViewMode = "bar" | "line" | "area";
 
 const RANGES = [
   { label: "7d", days: 7 },
-  { label: "14d", days: 14 },
   { label: "30d", days: 30 },
   { label: "90d", days: 90 },
 ];
@@ -31,7 +52,56 @@ const RANGES = [
 const charts: { key: ViewMode; label: string }[] = [
   { key: "bar", label: "Bar" },
   { key: "line", label: "Line" },
+  { key: "area", label: "Area" },
 ];
+
+function mergeContributionData(
+  myData: DayData[],
+  friendData: DayData[]
+): GraphPoint[] {
+  const map = new Map<string, GraphPoint>();
+
+  myData.forEach(d => {
+    map.set(d.day, {
+      date: d.day,
+      you: d.commits,
+      friend: 0,
+    });
+  });
+
+  friendData.forEach(d => {
+    if (!map.has(d.day)) {
+      map.set(d.day, {
+        date: d.day,
+        you: 0,
+        friend: d.commits,
+      });
+    } else {
+      map.get(d.day)!.friend = d.commits;
+    }
+  });
+
+  return Array.from(map.values()).sort((a, b) =>
+    a.date.localeCompare(b.date)
+  );
+}
+
+function mergeContributionSources(
+  sources: ContributionSources | undefined,
+  fallback: Record<string, number>
+): Record<string, number> {
+  if (!sources) return fallback;
+
+  const github = sources.github ?? fallback;
+  const gitlab = sources.gitlab ?? {};
+  const merged = { ...github };
+
+  for (const [day, commits] of Object.entries(gitlab)) {
+    merged[day] = (merged[day] ?? 0) + commits;
+  }
+
+  return merged;
+}
 
 export default function ContributionGraph() {
   const { selectedAccount } = useAccount();
@@ -42,25 +112,94 @@ export default function ContributionGraph() {
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [minutesAgo, setMinutesAgo] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [commits, setCommits] = useState<CommitItem[]>([]);
+  const [usesTouchTooltip, setUsesTouchTooltip] = useState(false);
+  
+  // Compare mode state
+  const [compareMode, setCompareMode] = useState(false);
+  const [compareUser, setCompareUser] = useState<string | null>(null);
+  const [friendData, setFriendData] = useState<DayData[]>([]);
+  const [compareError, setCompareError] = useState<string | null>(null);
+  const [compareLoading, setCompareLoading] = useState(false);
+  const [compareRequestId, setCompareRequestId] = useState(0);
+
+  // Custom range state
+  const [customFrom, setCustomFrom] = useState("");
+  const [customTo, setCustomTo] = useState("");
+  const [showPopover, setShowPopover] = useState(false);
+  const [customLabel, setCustomLabel] = useState<string | null>(null);
+  const [customError, setCustomError] = useState<string | null>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
+
+  // Fetch my data
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const stored = localStorage.getItem("devtrack:contribution-range");
+        if (stored === "7" || stored === "30" || stored === "90" || stored === "365") {
+          setDays(Number(stored));
+        } else {
+          localStorage.setItem("devtrack:contribution-range", "30");
+          setDays(30);
+        }
+      } catch {
+        setDays(30);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return;
+
+    const media = window.matchMedia("(hover: none), (pointer: coarse)");
+    const updateTooltipMode = () => setUsesTouchTooltip(media.matches);
+
+    updateTooltipMode();
+    media.addEventListener("change", updateTooltipMode);
+
+    return () => media.removeEventListener("change", updateTooltipMode);
+  }, []);
+
+  const handleRangeChange = (newDays: number) => {
+    setDays(newDays);
+    setCustomLabel(null);
+    setCustomFrom("");
+    setCustomTo("");
+    if (typeof window !== "undefined") {
+      try {
+        localStorage.setItem("devtrack:contribution-range", String(newDays));
+      } catch {}
+    }
+  };
 
   useEffect(() => {
     setLoading(true);
     setError(null);
+    setCommits([]);
     const accountParam =
       selectedAccount !== null
         ? `&accountId=${encodeURIComponent(selectedAccount)}`
         : "";
-    fetch(`/api/metrics/contributions?days=${days}${accountParam}`)
+    const url =
+      customLabel && customFrom && customTo
+        ? `/api/metrics/contributions?from=${customFrom}&to=${customTo}${accountParam}`
+        : `/api/metrics/contributions?days=${days}${accountParam}`;
+
+    fetch(url)
       .then((r) => {
         if (!r.ok) throw new Error("API error");
         return r.json();
       })
-      .then((res: { data: Record<string, number> }) => {
-        const sorted = Object.entries(res.data ?? {})
+      .then((res: ContributionResponse) => {
+        const merged = mergeContributionSources(
+          res.sources,
+          res.data ?? {}
+        );
+        const sorted = Object.entries(merged)
           .sort(([a], [b]) => a.localeCompare(b))
           .map(([day, commits]) => ({ day, commits }));
-
         setData(sorted);
+        setCommits(res.commits ?? []);
       })
       .catch(() => {
         setError("Failed to load contribution data.");
@@ -70,7 +209,77 @@ export default function ContributionGraph() {
         setLastUpdated(new Date());
         setMinutesAgo(0);
       });
-  }, [days, selectedAccount]);
+    }, [days, selectedAccount, customFrom, customTo, customLabel]);
+
+  // Fetch friend data when compare mode is on and compareUser changes
+  useEffect(() => {
+    if (!compareMode || !compareUser) {
+      setFriendData([]);
+      setCompareError(null);
+      return;
+    }
+
+    setCompareLoading(true);
+    setCompareError(null);
+    
+    fetch(`/api/metrics/contributions?days=${days}&username=${encodeURIComponent(compareUser)}`)
+      .then((r) => {
+        if (!r.ok) throw new Error("Failed to fetch friend data");
+        return r.json();
+      })
+      .then((res: { data: Record<string, number> }) => {
+        const sorted = Object.entries(res.data ?? {})
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([day, commits]) => ({ day, commits }));
+        setFriendData(sorted);
+      })
+      .catch(() => {
+        setCompareError("Failed to load friend data");
+        setFriendData([]);
+      })
+      .finally(() => {
+        setCompareLoading(false);
+      });
+  }, [compareMode, compareUser, days, compareRequestId]);
+
+  useEffect(() => {
+    const onCompareUser = (event: Event) => {
+      const customEvent = event as CustomEvent<{ username?: string }>;
+      const username = customEvent.detail?.username?.trim();
+      if (!username) return;
+      setCompareUser(username);
+      setCompareMode(true);
+      setCompareError(null);
+      setCompareRequestId((prev) => prev + 1);
+    };
+
+    const onClearCompareUser = () => {
+      setCompareMode(false);
+      setCompareUser(null);
+      setFriendData([]);
+      setCompareError(null);
+    };
+
+    window.addEventListener("devtrack:compare-user", onCompareUser as EventListener);
+    window.addEventListener("devtrack:clear-compare-user", onClearCompareUser);
+
+    return () => {
+      window.removeEventListener("devtrack:compare-user", onCompareUser as EventListener);
+      window.removeEventListener("devtrack:clear-compare-user", onClearCompareUser);
+    };
+  }, []);
+
+  useEffect(() => {
+    const handleToggleChart = () => {
+      setChartType((prev) => {
+        if (prev === "bar") return "line";
+        if (prev === "line") return "area";
+        return "bar";
+      });
+    };
+    window.addEventListener("toggleChart", handleToggleChart);
+    return () => window.removeEventListener("toggleChart", handleToggleChart);
+  }, []);
 
   useEffect(() => {
     if (!lastUpdated) return;
@@ -81,38 +290,192 @@ export default function ContributionGraph() {
     return () => clearInterval(interval);
   }, [lastUpdated]);
 
+  useEffect(() => {
+    if (!showPopover) return;
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setShowPopover(false);
+    };
+    const handleClick = (e: MouseEvent) => {
+      if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) {
+        setShowPopover(false);
+      }
+    };
+    document.addEventListener("keydown", handleKey);
+    document.addEventListener("mousedown", handleClick);
+    return () => {
+      document.removeEventListener("keydown", handleKey);
+      document.removeEventListener("mousedown", handleClick);
+    };
+  }, [showPopover]);
+
+  const handleClearCompare = () => {
+    window.dispatchEvent(new Event("devtrack:clear-compare-user"));
+    setCompareMode(false);
+    setCompareUser(null);
+    setFriendData([]);
+    setCompareError(null);
+  };
+
+  const handleCustomApply = () => {
+    setCustomError(null);
+    const today = new Date().toISOString().slice(0, 10);
+
+    if (!customFrom || !customTo) {
+      setCustomError("Please select both dates.");
+      return;
+    }
+    if (customFrom > customTo) {
+      setCustomError("Start date must be before end date.");
+      return;
+    }
+    if (customTo > today) {
+      setCustomError("End date can't be in the future.");
+      return;
+    }
+    const msPerDay = 1000 * 60 * 60 * 24;
+    const diff =
+      (new Date(customTo).getTime() - new Date(customFrom).getTime()) / msPerDay;
+    if (diff > 365 * 2) {
+      setCustomError("Max range is 2 years.");
+      return;
+    }
+
+    const fmt = (d: string) => {
+      const [year, month, day] = d.split("-").map(Number);
+      return new Date(year, month - 1, day).toLocaleDateString("en-US", {
+        month: "short",
+        day: "numeric",
+      });
+      };
+    setCustomLabel(`${fmt(customFrom)} – ${fmt(customTo)}`);
+    setShowPopover(false);
+  };
+
+  const mergedData =
+    compareMode && data.length > 0
+      ? mergeContributionData(data, friendData)
+      : [];
+
+  const displayData = compareMode ? mergedData : data;
+  const hasFriendData = compareMode && friendData.length > 0 && !compareError;
+  const tooltipTrigger = usesTouchTooltip ? "click" : "hover";
+
   return (
-    <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-6 shadow-sm">
+    <div
+      id="contribution-activity"
+      className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-6 shadow-sm"
+    >
       <div className="flex flex-wrap items-center justify-between mb-4 gap-2">
-        <h2 className="text-lg font-semibold text-[var(--card-foreground)]">
-          Commit Activity
-        </h2>
+        <div className="min-w-0">
+          <h2 className="text-lg font-semibold text-[var(--foreground)]">
+            {compareMode && compareUser ? `You vs ${compareUser}` : "Your Commits"}
+          </h2>
+          {compareMode && compareError && (
+            <p className="mt-1 text-xs text-[var(--muted-foreground)]">{compareError}</p>
+          )}
+          {compareMode && compareLoading && (
+            <p className="text-xs text-[var(--muted-foreground)] mt-1">Loading friend data...</p>
+          )}
+        </div>
 
         <div className="flex flex-wrap items-center gap-2">
-
-          <div className="flex gap-1 rounded-lg bg-[var(--control)] p-1">
+          {/* Range buttons */}
+          <div className="flex gap-1 rounded-lg border border-[var(--border)] bg-[var(--background)] p-1">
             {RANGES.map((r) => (
               <button
                 key={r.days}
-                onClick={() => setDays(r.days)}
+                onClick={() => handleRangeChange(r.days)}
                 aria-label={`Show ${r.days}-day range`}
-                aria-pressed={days === r.days}
-                className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${days === r.days
-                  ? "bg-[var(--accent)] text-[var(--accent-foreground)]"
-                  : "text-[var(--muted-foreground)] hover:text-[var(--card-foreground)]"
-                  }`}
+                aria-pressed={days === r.days && !customLabel}
+                className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
+                  days === r.days && !customLabel
+                    ? "bg-[var(--accent)] text-[var(--background)]"
+                    : "text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
+                }`}
               >
                 {r.label}
               </button>
             ))}
           </div>
 
+          {/* Custom date range */}
+          <div className="relative" ref={popoverRef}>
+            <button
+              onClick={() => setShowPopover((v) => !v)}
+              className={`px-3 py-1 rounded-md text-sm font-medium transition-colors border border-[var(--border)] ${
+                customLabel
+                  ? "bg-[var(--accent)] text-[var(--background)]"
+                  : "text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
+              }`}
+            >
+              {customLabel ?? "Custom…"}
+            </button>
+
+            {showPopover && (
+              <div className="absolute right-0 top-10 z-50 w-72 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4 shadow-lg">
+                <p className="text-sm font-medium text-[var(--foreground)] mb-3">
+                  Custom range
+                </p>
+                <div className="flex flex-col gap-2">
+                  <label className="text-xs text-[var(--muted-foreground)]">
+                    Start date
+                    <input
+                      type="date"
+                      value={customFrom}
+                      max={new Date().toISOString().slice(0, 10)}
+                      onChange={(e) => {
+                        setCustomFrom(e.target.value);
+                        if (!customTo) {
+                          setCustomTo(new Date().toISOString().slice(0, 10));
+                        }
+                      }}
+                      className="mt-1 w-full rounded-md border border-[var(--border)] bg-[var(--background)] px-2 py-1 text-sm text-[var(--foreground)]"
+                    />
+                  </label>
+                  <label className="text-xs text-[var(--muted-foreground)]">
+                    End date
+                    <input
+                      type="date"
+                      value={customTo}
+                      max={new Date().toISOString().slice(0, 10)}
+                      onChange={(e) => setCustomTo(e.target.value)}
+                      className="mt-1 w-full rounded-md border border-[var(--border)] bg-[var(--background)] px-2 py-1 text-sm text-[var(--foreground)]"
+                    />
+                  </label>
+                  {customError && (
+                    <p className="text-xs text-[var(--destructive)]">{customError}</p>
+                  )}
+                  {customLabel && (
+                    <button
+                      onClick={() => {
+                        setCustomLabel(null);
+                        setCustomFrom("");
+                        setCustomTo("");
+                        setCustomError(null);
+                        setShowPopover(false);
+                      }}
+                      className="w-full rounded-md border border-[var(--border)] py-1.5 text-sm font-medium text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors"
+                    >
+                      Clear
+                    </button>
+                  )}
+                  <button
+                    onClick={handleCustomApply}
+                    className="mt-1 w-full rounded-md bg-[var(--accent)] py-1.5 text-sm font-medium text-[var(--background)] hover:opacity-90 transition-opacity"
+                  >
+                    Apply
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
           {/* Chart Toggle Buttons */}
-          {data.length > 0 && !error && (
+          {displayData.length > 0 && !error && (
             <div
               role="group"
               aria-label="Chart type"
-              className="flex gap-1 rounded-lg bg-[var(--control)] p-1 text-sm"
+              className="flex gap-1 rounded-lg border border-[var(--border)] bg-[var(--background)] p-1 text-sm"
             >
               {charts.map((chart) => (
                 <button
@@ -120,92 +483,232 @@ export default function ContributionGraph() {
                   type="button"
                   onClick={() => setChartType(chart.key)}
                   aria-pressed={chartType === chart.key}
-                  className={`px-3 py-1 rounded-md transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 ${chartType === chart.key
-                      ? "bg-[var(--accent)] text-[var(--accent-foreground)]"
-                      : "text-[var(--muted-foreground)] hover:text-[var(--card-foreground)]"
-                    }`}
+                  className={`px-3 py-1 rounded-md transition-colors duration-200 focus:outline-none ${
+                    chartType === chart.key
+                      ? "bg-[var(--accent)] text-[var(--background)]"
+                      : "text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
+                  }`}
                 >
                   {chart.label}
                 </button>
               ))}
             </div>
           )}
+
+          {/* Clear compare button */}
+          {compareMode && (
+            <button
+              onClick={handleClearCompare}
+              className="px-3 py-1 rounded-md text-sm font-medium text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors border border-[var(--border)]"
+            >
+              Clear
+            </button>
+          )}
         </div>
       </div>
 
       {loading ? (
-        <div className="h-[200px] rounded bg-[var(--card-muted)] animate-pulse" />
+        <div
+          role="status"
+          aria-live="polite"
+          aria-busy="true"
+        >
+          <span className="sr-only">Loading contribution graph</span>
+          <div
+            aria-hidden="true"
+            className="h-[220px] rounded border border-[var(--border)] bg-[var(--background)] animate-pulse"
+          />
+        </div>
       ) : error ? (
-        <div className="flex h-[200px] items-center rounded-lg border border-red-500/30 bg-red-500/10 px-4">
-          <p className="text-sm text-red-400">
+        <div className="flex h-[220px] items-center rounded-lg border border-[var(--border)] bg-[var(--background)] px-4">
+          <p className="text-sm text-[var(--muted-foreground)]">
             {error} Please try refreshing.
           </p>
         </div>
-      ) : data.length === 0 ? (
-        <p className="flex h-[200px] items-center text-sm text-[var(--muted-foreground)]">
+      ) : displayData.length === 0 ? (
+        <p className="flex h-[220px] items-center justify-center rounded-lg border border-dashed border-[var(--border)] bg-[var(--background)] px-4 text-sm text-[var(--muted-foreground)]">
           No commits in the last {days} days.
         </p>
       ) : (
-        <ResponsiveContainer width="100%" height={200}>
+        <div className="h-[220px] w-full overflow-hidden">
+        <ResponsiveContainer width="100%" height="100%">
           {chartType === "bar" ? (
-            <BarChart data={data}>
+            <BarChart data={displayData}>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-              <XAxis dataKey="day" hide />
+              <XAxis 
+                dataKey={compareMode ? "date" : "day"} 
+                hide 
+              />
               <YAxis stroke="var(--muted-foreground)" allowDecimals={false} />
               <Tooltip
+                trigger={tooltipTrigger}
                 contentStyle={{
-                  background: "var(--tooltip)",
-                  color: "var(--tooltip-foreground)",
+                  background: "var(--card)",
+                  color: "var(--foreground)",
                   border: "1px solid var(--border)",
                   borderRadius: "8px",
                 }}
                 labelStyle={{
-                  color: "var(--tooltip-foreground)",
+                  color: "var(--foreground)",
                   fontSize: "12px",
                 }}
-                cursor={{ fill: "var(--card-muted)" }}
+                cursor={false}
               />
-              <Bar
-                dataKey="commits"
-                fill="var(--accent)"
-                radius={[4, 4, 0, 0]}
-              />
+              {hasFriendData && (
+                <Legend wrapperStyle={{ color: "var(--muted-foreground)", fontSize: "12px" }} />
+              )}
+              {compareMode && hasFriendData ? (
+                <>
+                  <Bar
+                    dataKey="you"
+                    fill="var(--accent)"
+                    radius={[4, 4, 0, 0]}
+                    name="You"
+                  />
+                  <Bar
+                    dataKey="friend"
+                    fill="var(--muted-foreground)"
+                    radius={[4, 4, 0, 0]}
+                    name={`${compareUser}`}
+                  />
+                </>
+              ) : (
+                <Bar
+                  dataKey="commits"
+                  fill="var(--accent)"
+                  radius={[4, 4, 0, 0]}
+                />
+              )}
             </BarChart>
-          ) : (
-            <LineChart data={data}>
+          ) : chartType === "line" ? (
+            <LineChart data={displayData}>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-              <XAxis dataKey="day" hide />
+              <XAxis 
+                dataKey={compareMode ? "date" : "day"} 
+                hide 
+              />
               <YAxis stroke="var(--muted-foreground)" allowDecimals={false} />
               <Tooltip
+                trigger={tooltipTrigger}
                 contentStyle={{
-                  background: "var(--tooltip)",
-                  color: "var(--tooltip-foreground)",
+                  background: "var(--card)",
+                  color: "var(--foreground)",
                   border: "1px solid var(--border)",
                   borderRadius: "8px",
                 }}
                 labelStyle={{
-                  color: "var(--tooltip-foreground)",
+                  color: "var(--foreground)",
                   fontSize: "12px",
                 }}
-                cursor={{ fill: "var(--card-muted)" }}
+                cursor={false}
               />
-              <Line
-                type="monotone"
-                dataKey="commits"
-                stroke="var(--accent)"
-                strokeWidth={2}
-                dot={false}
-              />
+              {hasFriendData && (
+                <Legend wrapperStyle={{ color: "var(--muted-foreground)", fontSize: "12px" }} />
+              )}
+              {compareMode && hasFriendData ? (
+                <>
+                  <Line
+                    type="monotone"
+                    dataKey="you"
+                    stroke="var(--accent)"
+                    strokeWidth={2}
+                    dot={false}
+                    name="You"
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="friend"
+                    stroke="var(--muted-foreground)"
+                    strokeWidth={2}
+                    strokeDasharray="4 4"
+                    dot={false}
+                    name={`${compareUser}`}
+                  />
+                </>
+              ) : (
+                <Line
+                  type="monotone"
+                  dataKey="commits"
+                  stroke="var(--accent)"
+                  strokeWidth={2}
+                  dot={false}
+                />
+              )}
             </LineChart>
+          ) : (
+            <AreaChart data={displayData}>
+              <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+              <XAxis 
+                dataKey={compareMode ? "date" : "day"} 
+                hide 
+              />
+              <YAxis stroke="var(--muted-foreground)" allowDecimals={false} />
+              <Tooltip
+                contentStyle={{
+                  background: "var(--card)",
+                  color: "var(--foreground)",
+                  border: "1px solid var(--border)",
+                  borderRadius: "8px",
+                }}
+                labelStyle={{
+                  color: "var(--foreground)",
+                  fontSize: "12px",
+                }}
+                cursor={false}
+              />
+              {hasFriendData && (
+                <Legend wrapperStyle={{ color: "var(--muted-foreground)", fontSize: "12px" }} />
+              )}
+              {compareMode && hasFriendData ? (
+                <>
+                  <Area
+                    type="monotone"
+                    dataKey="you"
+                    stroke="var(--accent)"
+                    fill="var(--accent)"
+                    fillOpacity={0.3}
+                    name="You"
+                  />
+                  <Area
+                    type="monotone"
+                    dataKey="friend"
+                    stroke="var(--muted-foreground)"
+                    fill="var(--muted-foreground)"
+                    fillOpacity={0.3}
+                    name={`${compareUser}`}
+                  />
+                </>
+              ) : (
+                <Area
+                  type="monotone"
+                  dataKey="commits"
+                  stroke="var(--accent)"
+                  fill="var(--accent)"
+                  fillOpacity={0.3}
+                />
+              )}
+            </AreaChart>
           )}
         </ResponsiveContainer>
+        </div>
       )}
-      {lastUpdated && (
+      
+      {lastUpdated && !compareMode && (
         <p className="mt-2 text-right text-xs text-[var(--muted-foreground)]">
           {minutesAgo === 0
             ? "Updated just now"
             : `Updated ${minutesAgo} min ago`}
         </p>
+      )}
+      
+      {compareMode && compareUser && !compareLoading && !compareError && (
+        <p className="mt-2 text-right text-xs text-[var(--muted-foreground)]">
+          Comparing with {compareUser}
+        </p>
+      )}
+
+      {!compareMode && (
+        <CommitSearchPanel commits={commits} loading={loading} />
       )}
     </div>
   );

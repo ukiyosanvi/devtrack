@@ -1,21 +1,30 @@
+import ActivityRingChart from "@/components/ActivityRingChart";
 import ContributionGraph from "@/components/ContributionGraph";
 import ContributionHeatmap from "@/components/ContributionHeatmap";
-import QuickMetricsCharts from "@/components/QuickMetricsCharts"; // 🌟 Your triple micro-charts component
+import QuickMetricsCharts from "@/components/QuickMetricsCharts";
 import PRMetrics from "@/components/PRMetrics";
+import CommunityMetrics from "@/components/CommunityMetrics";
 import PRBreakdownChart from "@/components/PRBreakdownChart";
 import GoalTracker from "@/components/GoalTracker";
 import DashboardHeader from "@/components/DashboardHeader";
 import StreakTracker from "@/components/StreakTracker";
 import TopRepos from "@/components/TopRepos";
 import PinnedRepos from "@/components/PinnedRepos";
+import InactiveRepositoriesCard from "@/components/InactiveRepositoriesCard";
 import LanguageBreakdown from "@/components/LanguageBreakdown";
 import CommitTimeChart from "@/components/CommitTimeChart";
+import CodingActivityInsightsCard from "@/components/CodingActivityInsightsCard";
+import PRReviewTrendChart from "@/components/PRReviewTrendChart";
+import CIAnalytics from "@/components/CIAnalytics";
 import IssueMetrics from "@/components/IssueMetrics";
 import StreakAtRiskBanner from "@/components/StreakAtRiskBanner";
 import FriendComparison from "@/components/FriendComparison";
 import WeeklySummaryCard from "@/components/WeeklySummaryCard";
 import ExportButton from "@/components/ExportButton";
+import Link from "next/link";
 import PersonalRecords from "@/components/PersonalRecords";
+import LocalCodingTime from "@/components/LocalCodingTime";
+import RecentActivity from "@/components/RecentActivity";
 import { authOptions } from "@/lib/auth";
 import { getServerSession } from "next-auth";
 import { redirect } from "next/navigation";
@@ -23,19 +32,28 @@ import { redirect } from "next/navigation";
 export default async function DashboardPage() {
   const session = await getServerSession(authOptions);
 
-  if (!session) {
-    redirect("/");
-  }
+  if (!session) redirect("/");
 
   return (
     <div className="min-h-screen bg-[var(--background)] p-4 md:p-8 text-[var(--foreground)] transition-colors">
       <DashboardHeader />
-      <div className="mb-6 flex justify-end">
+
+      <div className="mb-6 flex justify-end items-center gap-2">
+        <Link
+          href="/dashboard/settings"
+          className="rounded-lg border border-[var(--border)] bg-[var(--control)] px-4 py-2 text-sm text-[var(--foreground)] hover:opacity-90 transition-opacity min-w-[140px] flex items-center justify-center"
+        >
+          Settings
+        </Link>
+
         <ExportButton />
       </div>
+
       <StreakAtRiskBanner />
 
-      <WeeklySummaryCard />
+      <div className="mb-6">
+        <WeeklySummaryCard />
+      </div>
 
       <div className="mb-6">
         <PersonalRecords />
@@ -43,35 +61,59 @@ export default async function DashboardPage() {
 
       {/* Row 1: Contribution graph + Heatmap + Friend Comparison + Quick Metrics */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Left Column (Spans 2 columns) */}
+        {/* Left Column */}
         <div className="lg:col-span-2 flex flex-col gap-6">
           <ContributionGraph />
+
           <ContributionHeatmap />
-          
-          {/* Grouped container so QuickMetricsCharts sits perfectly below Friend Comparison on the left */}
+
+          {/* Friend Comparison + Quick Metrics */}
           <div className="flex flex-col gap-6">
             <FriendComparison />
-            {/* 🎯 Injected here: Sits exactly below Friend Comparison and directly above Row 2 (PR Analytics) */}
+
             <QuickMetricsCharts />
           </div>
         </div>
 
-        {/* Right Column (Spans 1 column) - Kept completely original */}
+        {/* Right Column */}
         <div className="flex flex-col gap-6">
           <StreakTracker />
+
+          <LocalCodingTime />
         </div>
       </div>
 
-      {/* Row 2: PR metrics, PR breakdown & Time Chart (Directly below your new charts!) */}
-      <div className="mt-6 grid grid-cols-1 lg:grid-cols-3 gap-6">
+      {/* Row 2: PR metrics, community metrics, PR breakdown & Time Chart */}
+      <div className="mt-6 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6">
         <PRMetrics />
+
+        <CommunityMetrics />
+
         <PRBreakdownChart />
+
         <CommitTimeChart />
       </div>
 
-      {/* Row 3: Issue metrics */}
+      {/* Row 2b: Activity Ring Chart */}
       <div className="mt-6">
-        <IssueMetrics />
+        <ActivityRingChart />
+      </div>
+
+      <div className="mt-6">
+        <CodingActivityInsightsCard />
+      </div>
+
+      <div className="mt-6">
+        <PRReviewTrendChart />
+      </div>
+
+      {/* Row 3: Issue metrics + CI analytics */}
+      <div className="mt-6 grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="lg:col-span-2">
+          <IssueMetrics />
+        </div>
+
+        <CIAnalytics />
       </div>
 
       {/* Row 4: Pinned repositories */}
@@ -79,11 +121,23 @@ export default async function DashboardPage() {
         <PinnedRepos />
       </div>
 
-      {/* Row 5: Top repos + Language breakdown + Goal tracker */}
+      {/* Row 5: Inactive repository reminder */}
+      <div className="mt-6">
+        <InactiveRepositoriesCard />
+      </div>
+
+      {/* Row 6: Top repos + Language breakdown + Goal tracker */}
       <div className="mt-6 grid grid-cols-1 lg:grid-cols-3 gap-6">
         <TopRepos />
+
         <LanguageBreakdown />
+
         <GoalTracker />
+      </div>
+
+      {/* Row 7: Recent GitHub activity */}
+      <div className="mt-6">
+        <RecentActivity />
       </div>
     </div>
   );
